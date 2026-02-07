@@ -5,7 +5,26 @@ const fetch = require('node-fetch');
 const app = express();
 const PORT = 3001;
 
-app.use(cors());
+// Configure CORS to allow your frontend domain
+const allowedOrigins = [
+  'https://busapp-frontend-eight.vercel.app',
+  'http://localhost:3000',
+  'http://localhost:3001'
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+}));
+
 app.use(express.json());
 
 // Cache for bus stop data
@@ -134,3 +153,6 @@ app.get('/api/bus-arrival', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Proxy server running on http://localhost:${PORT}`);
 });
+
+// Export for Vercel serverless
+module.exports = app;
