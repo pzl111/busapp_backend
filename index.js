@@ -32,6 +32,10 @@ let busStopsCache = null;
 let cacheTimestamp = null;
 const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
 
+// Cache for bus arrival data
+const arrivalCache = new Map();
+const ARRIVAL_CACHE_DURATION = 15000; // 15 seconds
+
 // Function to fetch all bus stops with pagination
 async function fetchAllBusStops(apiKey) {
   const allBusStops = [];
@@ -97,6 +101,44 @@ async function getBusStops(apiKey) {
   return busStops;
 }
 
+// Helper function to fetch single bus stop arrival with caching
+async function fetchBusArrival(busStopCode, apiKey) {
+  // Check cache first
+  const cacheKey = busStopCode;
+  const cached = arrivalCache.get(cacheKey);
+  
+  if (cached && (Date.now() - cached.timestamp < ARRIVAL_CACHE_DURATION)) {
+    return { data: cached.data, cached: true };
+  }
+
+  // Fetch fresh data from API
+  const arrivalResponse = await fetch(
+    `https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival?BusStopCode=${busStopCode}`,
+    {
+      method: 'GET',
+      headers: {
+        'AccountKey': apiKey,
+        'accept': 'application/json'
+      }
+    }
+  );
+
+  if (!arrivalResponse.ok) {
+    const errorText = await arrivalResponse.text();
+    throw new Error(`API Error: ${arrivalResponse.status} ${arrivalResponse.statusText} - ${errorText}`);
+  }
+
+  const arrivalData = await arrivalResponse.json();
+  
+  // Cache the response
+  arrivalCache.set(cacheKey, {
+    data: arrivalData,
+    timestamp: Date.now()
+  });
+
+  return { data: arrivalData, cached: false };
+}
+
 app.get('/api/bus-arrival', async (req, res) => {
   const { busStopCode, apiKey } = req.query;
 
@@ -109,43 +151,65 @@ app.get('/api/bus-arrival', async (req, res) => {
   }
 
   try {
-    // Fetch bus arrival data
-    const arrivalResponse = await fetch(
-      `https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival?BusStopCode=${busStopCode}`,
-      {
-        method: 'GET',
-        headers: {
-          'AccountKey': apiKey,
-          'accept': 'application/json'
-        }
-      }
-    );
-
-    if (!arrivalResponse.ok) {
-      const errorText = await arrivalResponse.text();
-      return res.status(arrivalResponse.status).json({ 
-        error: `API Error: ${arrivalResponse.status} ${arrivalResponse.statusText}`,
-        details: errorText
-      });
-    }
-
-    const arrivalData = await arrivalResponse.json();
-    
-    // Fetch bus stop details for the name
-    try {
-      const busStops = await getBusStops(apiKey);
-      const busStopInfo = busStops.find(stop => stop.BusStopCode === busStopCode);
-      if (busStopInfo) {
-        arrivalData.BusStopName = busStopInfo.Description;
-      }
-    } catch (err) {
-      // Ignore errors fetching bus stop name
-      console.error('Error fetching bus stop name:', err);
-    }
-    
-    res.json(arrivalData);
+    const result = await fetchBusArrival(busStopCode, apiKey);
+    res.json(result.data);
   } catch (error) {
     console.error('Proxy error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Batch endpoint for fetching multiple bus stops at once
+app.post('/api/bus-arrival-batch', async (req, res) => {
+  const { busStopCodes, apiKey } = req.body;
+
+  if (!apiKey) {
+    return res.status(400).json({ error: 'API key is required' });
+  }
+
+  if (!busStopCodes || !Array.isArray(busStopCodes) || busStopCodes.length === 0) {
+    return res.status(400).json({ error: 'busStopCodes array is required' });
+  }
+
+  // Limit batch size to prevent abuse
+  if (busStopCodes.length > 50) {
+    return res.status(400).json({ error: 'Maximum 50 bus stops per batch request' });
+  }
+
+  try {
+    // Fetch all bus stops in parallel with rate limiting (3 at a time)
+    const results = [];
+    const CONCURRENT_LIMIT = 3;
+    
+    for (let i = 0; i < busStopCodes.length; i += CONCURRENT_LIMIT) {
+      const batch = busStopCodes.slice(i, i + CONCURRENT_LIMIT);
+      const batchResults = await Promise.allSettled(
+        batch.map(async (code) => {
+          try {
+            const result = await fetchBusArrival(code, apiKey);
+            return {
+              busStopCode: code,
+              data: result.data,
+              cached: result.cached,
+              success: true
+            };
+          } catch (error) {
+            return {
+              busStopCode: code,
+              error: error.message,
+              success: false
+            };
+          }
+        })
+      );
+      
+      // Extract values from settled promises
+      results.push(...batchResults.map(r => r.status === 'fulfilled' ? r.value : r.reason));
+    }
+
+    res.json({ results });
+  } catch (error) {
+    console.error('Batch proxy error:', error);
     res.status(500).json({ error: error.message });
   }
 });
