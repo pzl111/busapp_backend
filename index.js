@@ -1,17 +1,9 @@
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
-const compression = require('compression');
-const http = require('http');
-const https = require('https');
 
 const app = express();
 const PORT = 3001;
-
-// Configure HTTP agents for connection reuse (Keep-Alive)
-const httpAgent = new http.Agent({ keepAlive: true });
-const httpsAgent = new https.Agent({ keepAlive: true });
-const agent = (_parsedURL) => _parsedURL.protocol == 'http:' ? httpAgent : httpsAgent;
 
 // Configure CORS to allow your frontend domain
 const allowedOrigins = [
@@ -33,9 +25,6 @@ app.use(cors({
   credentials: true
 }));
 
-// Enable response compression
-app.use(compression());
-
 app.use(express.json());
 
 // Cache for bus stop data
@@ -47,27 +36,6 @@ const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
 const arrivalCache = new Map();
 const ARRIVAL_CACHE_DURATION = 15000; // 15 seconds
 
-// Fetch with timeout to prevent hanging requests
-async function fetchWithTimeout(url, options = {}, timeout = 5000) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
-  
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal
-    });
-    clearTimeout(id);
-    return response;
-  } catch (error) {
-    clearTimeout(id);
-    if (error.name === 'AbortError') {
-      throw new Error('Request timeout');
-    }
-    throw error;
-  }
-}
-
 // Function to fetch all bus stops with pagination
 async function fetchAllBusStops(apiKey) {
   const allBusStops = [];
@@ -76,17 +44,15 @@ async function fetchAllBusStops(apiKey) {
   
   try {
     while (true) {
-      const response = await fetchWithTimeout(
+      const response = await fetch(
         `https://datamall2.mytransport.sg/ltaodataservice/BusStops?$skip=${skip}`,
         {
           method: 'GET',
           headers: {
             'AccountKey': apiKey,
             'accept': 'application/json'
-          },
-          agent: agent
-        },
-        10000 // 10 second timeout for bus stops
+          }
+        }
       );
 
       if (!response.ok) {
@@ -146,17 +112,15 @@ async function fetchBusArrival(busStopCode, apiKey) {
   }
 
   // Fetch fresh data from API
-  const arrivalResponse = await fetchWithTimeout(
+  const arrivalResponse = await fetch(
     `https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival?BusStopCode=${busStopCode}`,
     {
       method: 'GET',
       headers: {
         'AccountKey': apiKey,
         'accept': 'application/json'
-      },
-      agent: agent
-    },
-    5000 // 5 second timeout for arrivals
+      }
+    }
   );
 
   if (!arrivalResponse.ok) {
