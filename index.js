@@ -179,7 +179,7 @@ app.post('/api/bus-arrival-batch', async (req, res) => {
   try {
     // Fetch all bus stops in parallel with rate limiting (3 at a time)
     const results = [];
-    const CONCURRENT_LIMIT = 3;
+    const CONCURRENT_LIMIT = 50;
     
     for (let i = 0; i < busStopCodes.length; i += CONCURRENT_LIMIT) {
       const batch = busStopCodes.slice(i, i + CONCURRENT_LIMIT);
